@@ -18,6 +18,8 @@ namespace dotBunny.Unity
     using System.Text.RegularExpressions;
     using UnityEditor;
     using UnityEngine;
+    using System.Collections.Generic;
+    using System.Linq;
 
     [InitializeOnLoad]
     public static class VSCode
@@ -32,7 +34,7 @@ namespace dotBunny.Unity
         /// Current Version Code
         /// </summary>
         public const string VersionCode = "-RELEASE";
-        
+
         /// <summary>
         /// Download URL for Unity Debbuger
         /// </summary>
@@ -57,15 +59,15 @@ namespace dotBunny.Unity
                 }
                 return EditorPrefs.GetString("VSCode_CodePath", current);
             }
-            set 
+            set
             {
                 EditorPrefs.SetString("VSCode_CodePath", value);
             }
         }
-        
+
         static string ProgramFilesx86()
 		{
-			if( 8 == IntPtr.Size 
+			if( 8 == IntPtr.Size
 				|| (!String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PROCESSOR_ARCHITEW6432"))))
 			{
 				return Environment.GetEnvironmentVariable("ProgramFiles(x86)");
@@ -73,8 +75,8 @@ namespace dotBunny.Unity
 
 			return Environment.GetEnvironmentVariable("ProgramFiles");
 		}
-		
-        
+
+
         /// <summary>
         /// Should debug information be displayed in the Unity terminal?
         /// </summary>
@@ -87,6 +89,22 @@ namespace dotBunny.Unity
             set
             {
                 EditorPrefs.SetBool("VSCode_Debug", value);
+            }
+        }
+
+        /// <summary>
+        /// Should use wildcard includes in csproj to include .cs files, instead of listing them individually?
+        //  This avoids needing Unity to regenerate csproj's every time a file is rename/added
+        /// </summary>
+        public static bool UseWildcardIncludes
+        {
+            get
+            {
+                return EditorPrefs.GetBool("VSCode_UseWildcardIncludes", false);
+            }
+            set
+            {
+                EditorPrefs.SetBool("VSCode_UseWildcardIncludes", value);
             }
         }
 
@@ -121,15 +139,15 @@ namespace dotBunny.Unity
             set
             {
                 if ( value != UseUnityDebugger ) {
-                    
+
                     // Set value
                     EditorPrefs.SetBool("VSCode_UseUnityDebugger", value);
-                    
+
                     // Do not write the launch JSON file because the debugger uses its own
                     if ( value ) {
                         WriteLaunchFile = false;
                     }
-                    
+
                     // Update launch file
                     UpdateLaunchFile();
                 }
@@ -286,7 +304,7 @@ namespace dotBunny.Unity
             {
                 UpdateUnityPreferences(true);
                 UpdateLaunchFile();
-                
+
                 // Add Update Check
                 DateTime targetDate = LastUpdate.AddDays(UpdateTime);
                 if (DateTime.Now >= targetDate && AutomaticUpdates)
@@ -294,8 +312,8 @@ namespace dotBunny.Unity
                     CheckForUpdate();
                 }
             }
-            
-            // Event for when script is reloaded 
+
+            // Event for when script is reloaded
             System.AppDomain.CurrentDomain.DomainUnload += System_AppDomain_CurrentDomain_DomainUnload;
         }
         static void System_AppDomain_CurrentDomain_DomainUnload(object sender, System.EventArgs e)
@@ -358,6 +376,9 @@ namespace dotBunny.Unity
                 string content = File.ReadAllText(filePath);
                 content = ScrubProjectContent(content);
 
+                if(UseWildcardIncludes)
+                    content = ReplaceIncludesWithWildcards(filePath, content);
+
                 File.WriteAllText(filePath, content);
 
                 ScrubFile(filePath);
@@ -368,7 +389,7 @@ namespace dotBunny.Unity
         #endregion
 
         #region Private Members
-        
+
         	/// <summary>
         	/// Determines if the current path to the code executable is valid or not (exists)
         	/// </summary>
@@ -381,7 +402,7 @@ namespace dotBunny.Unity
         		return code.Exists;
                 #endif
         	}
-        	
+
         	/// <summary>
         	/// Print a error message to the Unity Console about not finding the code executable
             /// </summary>
@@ -390,11 +411,11 @@ namespace dotBunny.Unity
         		UnityEngine.Debug.LogError("[VSCode] Code executable in '" + path + "' not found. Check" +
         		"Visual Studio Code installation and insert the correct path in the Properties menu");
         	}
-        
+
         	/// <summary>
         	/// Try to find automatically the installation of VSCode
         	/// </summary>
-        	static string AutodetectCodePath() 
+        	static string AutodetectCodePath()
         	{
         	string[] possiblePaths =
 #if UNITY_EDITOR_OSX
@@ -418,7 +439,7 @@ namespace dotBunny.Unity
         	#endif
         		for(int i = 0; i < possiblePaths.Length; i++)
         		{
-        			if(VSCodeExists(possiblePaths[i])) 
+        			if(VSCodeExists(possiblePaths[i]))
         			{
         				return possiblePaths[i];
         			}
@@ -701,7 +722,7 @@ namespace dotBunny.Unity
         {
             EditorUtility.DisplayProgressBar("VSCode", "Downloading Unity Debugger ...", 0.1f);
             byte[] fileContent;
-            
+
             try
             {
                 using (var webClient = new System.Net.WebClient())
@@ -724,17 +745,17 @@ namespace dotBunny.Unity
             {
                 EditorUtility.ClearProgressBar();
             }
-            
+
             // Do we have a file to install?
             if ( fileContent != null ) {
                 string fileName = System.IO.Path.GetTempPath() + Guid.NewGuid().ToString() + ".vsix";
                 File.WriteAllBytes(fileName, fileContent);
-                
+
                 CallVSCode(fileName);
             }
 
         }
-    
+
         // HACK: This is in until Unity can figure out why MD keeps opening even though a different program is selected.
         [MenuItem("Assets/Open C# Project In Code", false, 1000)]
         static void MenuOpenProject()
@@ -771,20 +792,22 @@ namespace dotBunny.Unity
             EditorGUILayout.HelpBox("Support development of this plugin, follow @reapazor and @dotbunny on Twitter.", MessageType.Info);
 
             EditorGUI.BeginChangeCheck();
-            
+
             Enabled = EditorGUILayout.Toggle(new GUIContent("Enable Integration", "Should the integration work its magic for you?"), Enabled);
 #if UNITY_5_3_OR_NEWER
             CodePath = EditorGUILayout.DelayedTextField(new GUIContent("VS Code Path", "Full path to the Micosoft Visual Studio code executable."), CodePath);
 #else
             CodePath = EditorGUILayout.TextField(new GUIContent("VS Code Path", "Full path to the Micosoft Visual Studio code executable."), CodePath);
 #endif
-            
+
             UseUnityDebugger = EditorGUILayout.Toggle(new GUIContent("Use Unity Debugger", "Should the integration integrate with Unity's VSCode Extension (must be installed)."), UseUnityDebugger);
 
             EditorGUILayout.Space();
             RevertExternalScriptEditorOnExit = EditorGUILayout.Toggle(new GUIContent("Revert Script Editor On Unload", "Should the external script editor setting be reverted to its previous setting on project unload? This is useful if you do not use Code with all your projects."),RevertExternalScriptEditorOnExit);
-            
+
             Debug = EditorGUILayout.Toggle(new GUIContent("Output Messages To Console", "Should informational messages be sent to Unity's Console?"), Debug);
+
+            UseWildcardIncludes = EditorGUILayout.Toggle(new GUIContent("Should use wildcard includes in csproj to include .cs files, instead of listing them individually?  This avoids needing Unity to regenerate csproj's every time a file is rename/added"), UseWildcardIncludes);
 
             WriteLaunchFile = EditorGUILayout.Toggle(new GUIContent("Always Write Launch File", "Always write the launch.json settings when entering play mode?"), WriteLaunchFile);
 
@@ -1026,6 +1049,78 @@ namespace dotBunny.Unity
             return content;
         }
 
+        class IncludesExcludes{
+            public IncludesExcludes(){
+                Includes = new List<string>();
+                Excludes = new List<string>();
+            }
+            public List<string> Includes{get;set;}
+            public List<string> Excludes{get;set;}
+        }
+
+        static string ReplaceIncludesWithWildcards(string filePath, string content){
+            content = Regex.Replace(content, @"\s+<Compile Include=.*", "");
+            content = Regex.Replace(content, @"\s+<None Include=.*", "");
+
+            var projectInfo = new Dictionary<string, IncludesExcludes>{
+                {"Assembly-CSharp-Editor.csproj", new IncludesExcludes{
+                    Includes = new List<string>{
+                        "Assets\\**\\Editor\\**\\*.cs",
+                    },
+                    Excludes = new List<string>{
+                        "Assets\\Plugins\\**\\*.cs",
+                        "Assets\\Standard Assets\\**\\*.cs"
+                    }
+                }},
+                {"Assembly-CSharp-firstpass.csproj", new IncludesExcludes{
+                    Includes = new List<string>{
+                        "Assets\\Plugins\\**\\*.cs",
+                        "Assets\\Standard Assets\\**\\*.cs"
+                    },
+                    Excludes = new List<string>{
+                        "Assets\\Plugins\\**\\Editor\\**\\*.cs",
+                        "Assets\\Standard Assets\\Editor\\**\\*.cs"
+                    }
+                }},
+                {"Assembly-CSharp-Editor-firstpass.csproj", new IncludesExcludes{
+                    Includes = new List<string>{
+                        "Assets\\Plugins\\**\\Editor\\**\\*.cs",
+                        "Assets\\Standard Assets\\Editor\\**\\*.cs"
+                    },
+                    Excludes = new List<string>{
+                    }
+                }},
+                {"Assembly-CSharp.csproj", new IncludesExcludes{
+                    Includes = new List<string>{
+                        "Assets\\**\\*.cs"
+                    },
+                    Excludes = new List<string>{
+                        "Assets\\Plugins\\**\\*.cs",
+                        "Assets\\Standard Assets\\**\\*.cs"
+                    }
+                }},
+            };
+
+            var fileName = System.IO.Path.GetFileName(filePath);
+            if(projectInfo.ContainsKey(fileName)){
+                var includesExcludes = projectInfo[fileName];
+                var includes = includesExcludes.Includes;
+                var excludes = includesExcludes.Excludes;
+                var includeStrings = includes.Select(include =>
+                    "\t<Compile Include=\"" + include + "\" Exclude=\"" + string.Join(";", excludes.ToArray()) + "\"/>"
+                );
+                var includesString = string.Join("\n\r", includeStrings.ToArray());
+                var insertLocation = content.LastIndexOf("</Project>");
+                content = content.Substring(0, insertLocation) +
+                              "<ItemGroup>" +
+                              includesString +
+                              "</ItemGroup>" +
+                              content.Substring(insertLocation);
+            }
+            return content;
+        }
+
+
         /// <summary>
         /// Remove extra/erroneous data from solution file (content).
         /// </summary>
@@ -1047,15 +1142,15 @@ namespace dotBunny.Unity
 
             return content;
         }
-        
-       
+
+
         /// <summary>
         /// Update Visual Studio Code Launch file
         /// </summary>
         static void UpdateLaunchFile()
         {
             if ( !VSCode.Enabled ) return;
-            
+
             else if ( VSCode.UseUnityDebugger ) {
                 if (!Directory.Exists(VSCode.SettingsFolder))
                         System.IO.Directory.CreateDirectory(VSCode.SettingsFolder);
@@ -1064,7 +1159,7 @@ namespace dotBunny.Unity
                 string fileContent = "{\n\t\"version\": \"0.2.0\",\n\t\"configurations\": [\n\t\t{\n\t\t\t\"name\": \"Unity Editor\",\n\t\t\t\"type\": \"unity\",\n\t\t\t\"request\": \"launch\"\n\t\t},\n\t\t{\n\t\t\t\"name\": \"Windows Player\",\n\t\t\t\"type\": \"unity\",\n\t\t\t\"request\": \"launch\"\n\t\t},\n\t\t{\n\t\t\t\"name\": \"OSX Player\",\n\t\t\t\"type\": \"unity\",\n\t\t\t\"request\": \"launch\"\n\t\t},\n\t\t{\n\t\t\t\"name\": \"Linux Player\",\n\t\t\t\"type\": \"unity\",\n\t\t\t\"request\": \"launch\"\n\t\t},\n\t\t{\n\t\t\t\"name\": \"iOS Player\",\n\t\t\t\"type\": \"unity\",\n\t\t\t\"request\": \"launch\"\n\t\t},\n\t\t{\n\t\t\t\"name\": \"Android Player\",\n\t\t\t\"type\": \"unity\",\n\t\t\t\"request\": \"launch\"\n\n\t\t}\n\t]\n}";
                 File.WriteAllText(VSCode.LaunchPath, fileContent);
             }
-            
+
             else if (VSCode.WriteLaunchFile)
             {
                 int port = GetDebugPort();
@@ -1134,7 +1229,7 @@ namespace dotBunny.Unity
                     EditorPrefs.SetBool("VSCode_PreviousAttach", false);
                 }
                 EditorPrefs.SetBool("AllowAttachedDebuggingOfEditor", true);
-                
+
             }
             else
             {
@@ -1166,7 +1261,7 @@ namespace dotBunny.Unity
                 // Always leave editor attaching on, I know, it solves the problem of needing to restart for this
                 // to actually work
                 EditorPrefs.SetBool("AllowAttachedDebuggingOfEditor", true);
-                
+
             }
 
             FixUnityPreferences();
